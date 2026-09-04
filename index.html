@@ -1,0 +1,1001 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PDF Builder</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --border: #d9dce1;
+    --accent: #3a6df0;
+    --accent-dark: #2952c8;
+    --danger: #e0473b;
+    --text: #24292f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  header h1 { font-size: 20px; margin: 0; }
+  header p { margin: 4px 0 0; font-size: 13px; color: #666; }
+  .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button {
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 14px;
+  }
+  button:hover { background: #eef1f6; }
+  button.primary { background: var(--accent); color: white; border-color: var(--accent); }
+  button.primary:hover { background: var(--accent-dark); }
+  button.danger { color: var(--danger); border-color: var(--danger); }
+  button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  main { padding: 24px; max-width: 1200px; margin: 0 auto; }
+
+  #dropzone {
+    border: 2px dashed var(--border);
+    border-radius: 10px;
+    padding: 40px 20px;
+    text-align: center;
+    background: var(--panel);
+    color: #666;
+    transition: border-color .15s, background .15s;
+  }
+  #dropzone.dragover { border-color: var(--accent); background: #eef2ff; }
+  input[type=file] { display: none; }
+  #dropzone .pick-btn { margin-top: 10px; }
+
+  /* Quality panel */
+  #qualityPanel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-top: 18px;
+    display: flex;
+    gap: 22px;
+    flex-wrap: wrap;
+    align-items: center;
+    font-size: 13px;
+  }
+  #qualityPanel h3 { margin: 0; font-size: 14px; }
+  #qualityPanel label { display: flex; align-items: center; gap: 6px; }
+  #qualityPanel select, #qualityPanel input[type=range] { font-size: 13px; }
+  #estimate { color: #666; }
+
+  #pageGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 16px;
+    margin-top: 24px;
+  }
+  .page-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px;
+    position: relative;
+    cursor: grab;
+    user-select: none;
+  }
+  .page-card.dragging { opacity: 0.4; }
+  .page-card.drop-target { outline: 2px solid var(--accent); }
+  .page-card .thumb-wrap {
+    width: 100%;
+    height: 180px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #f0f0f0;
+    border-radius: 4px;
+  }
+  .page-card img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .page-card .index-badge {
+    position: absolute; top: 4px; left: 4px;
+    background: rgba(0,0,0,0.6); color: white;
+    font-size: 11px; padding: 2px 6px; border-radius: 10px;
+  }
+  .page-card .mark {
+    position: absolute; top: 4px; right: 4px;
+    font-size: 11px; background: rgba(58,109,240,.9); color:#fff;
+    padding: 2px 6px; border-radius: 10px;
+  }
+  .page-card .card-actions { display: flex; gap: 4px; margin-top: 8px; justify-content: center; }
+  .page-card .card-actions button { padding: 4px 8px; font-size: 12px; }
+
+  #emptyMsg { text-align: center; color: #888; margin-top: 40px; }
+
+  /* Modals */
+  .overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.6); z-index: 100;
+    align-items: center; justify-content: center; padding: 20px;
+  }
+  .overlay.open { display: flex; }
+  .modal {
+    background: var(--panel); border-radius: 10px;
+    max-width: 95vw; max-height: 95vh;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .modal-header {
+    padding: 12px 16px; display: flex; justify-content: space-between;
+    align-items: center; border-bottom: 1px solid var(--border);
+    gap: 12px; flex-wrap: wrap;
+  }
+  .modal-footer {
+    padding: 10px 16px; border-top: 1px solid var(--border);
+    display: flex; justify-content: flex-end; gap: 8px;
+  }
+  #editorControls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #editorControls label { font-size: 13px; display: flex; align-items: center; gap: 4px; }
+  #editorControls input[type=number] { width: 55px; }
+  .sep { width: 1px; height: 22px; background: var(--border); }
+
+  #editorCanvasWrap {
+    position: relative; overflow: auto; padding: 16px;
+    display: flex; align-items: flex-start; justify-content: center; background: #eee;
+  }
+  #editorStage { position: relative; display: inline-block; background: white; box-shadow: 0 0 0 1px var(--border); }
+  #editorStage img.base { display: block; max-width: 78vw; max-height: 66vh; }
+  #drawLayer { position: absolute; left: 0; top: 0; }
+
+  .text-box {
+    position: absolute; min-width: 20px; min-height: 1.2em;
+    padding: 2px 4px; border: 1px dashed transparent;
+    cursor: move; outline: none; white-space: pre-wrap;
+    line-height: 1.2; font-family: sans-serif;
+  }
+  .text-box:hover, .text-box:focus { border-color: var(--accent); }
+  .obj-del {
+    position: absolute; top: -10px; right: -10px;
+    width: 18px; height: 18px; line-height: 16px; text-align: center;
+    background: var(--danger); color: white; border-radius: 50%;
+    font-size: 12px; cursor: pointer; display: none; z-index: 5;
+  }
+  .text-box:hover .obj-del, .text-box:focus .obj-del { display: block; }
+
+  .sig-box { position: absolute; cursor: move; border: 1px dashed transparent; }
+  .sig-box:hover { border-color: var(--accent); }
+  .sig-box img { width: 100%; height: 100%; display: block; pointer-events: none; }
+  .sig-box:hover .obj-del { display: block; }
+  .sig-resize {
+    position: absolute; right: -7px; bottom: -7px;
+    width: 14px; height: 14px; background: var(--accent);
+    border: 2px solid #fff; border-radius: 50%; cursor: nwse-resize; display: none;
+  }
+  .sig-box:hover .sig-resize { display: block; }
+
+  .hint { font-size: 12px; color: #777; padding: 0 16px 10px; }
+  #statusMsg { font-size: 13px; color: #666; }
+
+  #sigPadCanvas { border: 1px solid var(--border); border-radius: 6px; background: #fff; cursor: crosshair; touch-action: none; }
+  .sig-tabs { display: flex; gap: 8px; margin-bottom: 10px; }
+  .sig-body { padding: 16px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>📄 PDF Builder</h1>
+    <p>Add images or PDFs, reorder, rotate, draw, sign, annotate and export — all in your browser, nothing is uploaded.</p>
+  </div>
+  <div class="toolbar">
+    <span id="statusMsg"></span>
+    <button id="clearAllBtn" class="danger">Clear all</button>
+    <button id="exportBtn" class="primary" disabled>Export PDF</button>
+  </div>
+</header>
+
+<main>
+  <div id="dropzone">
+    <div>📥 Drag &amp; drop images or PDFs here</div>
+    <button class="pick-btn" id="pickBtn">Choose files</button>
+    <input type="file" id="fileInput" accept="image/*,application/pdf" multiple>
+  </div>
+
+  <div id="qualityPanel">
+    <h3>⚙️ Output quality</h3>
+    <label>Format
+      <select id="formatSelect">
+        <option value="image/jpeg" selected>JPEG (smaller file)</option>
+        <option value="image/png">PNG (lossless, larger)</option>
+      </select>
+    </label>
+    <label id="qualityWrap">Quality
+      <input type="range" id="qualityRange" min="0.3" max="1" step="0.05" value="0.8">
+      <span id="qualityVal">80%</span>
+    </label>
+    <label>Max resolution
+      <select id="maxDimSelect">
+        <option value="1240">Small — 1240 px</option>
+        <option value="1754" selected>Medium — 1754 px (A4 @150dpi)</option>
+        <option value="2480">High — 2480 px (A4 @300dpi)</option>
+        <option value="0">Original</option>
+      </select>
+    </label>
+    <span id="estimate"></span>
+  </div>
+
+  <div id="emptyMsg">No pages yet. Add some images or a PDF to get started.</div>
+  <div id="pageGrid"></div>
+</main>
+
+<!-- Page editor -->
+<div id="editorOverlay" class="overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <strong>Edit page</strong>
+      <div id="editorControls">
+        <button id="modeSelectBtn" class="active">🖱 Select</button>
+        <button id="modeDrawBtn">✏️ Draw</button>
+        <div class="sep"></div>
+        <label>Color <input type="color" id="colorInput" value="#d0021b"></label>
+        <label>Size <input type="number" id="sizeInput" value="4" min="1" max="80"></label>
+        <div class="sep"></div>
+        <button id="addTextBtn">+ Text</button>
+        <button id="addSigBtn">✍️ Signature</button>
+        <div class="sep"></div>
+        <button id="undoStrokeBtn">↶ Undo line</button>
+        <button id="clearDrawBtn">Clear drawing</button>
+      </div>
+      <button id="closeEditorBtn">Close</button>
+    </div>
+    <div class="hint" id="editorHint">Select mode: drag text/signatures. Draw mode: hold and drag on the page to draw. "Size" sets pen width, or font size when a text box is selected.</div>
+    <div id="editorCanvasWrap">
+      <div id="editorStage"></div>
+    </div>
+    <div class="modal-footer">
+      <button id="saveEditorBtn" class="primary">Save changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- Signature creator -->
+<div id="sigOverlay" class="overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <strong>Add a signature</strong>
+      <button id="sigCloseBtn">Close</button>
+    </div>
+    <div class="sig-body">
+      <div class="sig-tabs">
+        <button id="sigDrawTab" class="active">Draw it</button>
+        <button id="sigUploadTab">Upload image</button>
+      </div>
+      <div id="sigDrawPane">
+        <canvas id="sigPadCanvas" width="560" height="200"></canvas>
+        <div style="margin-top:10px; display:flex; gap:8px; align-items:center;">
+          <label style="font-size:13px;">Ink <input type="color" id="sigColorInput" value="#0b2c6b"></label>
+          <button id="sigClearBtn">Clear</button>
+        </div>
+      </div>
+      <div id="sigUploadPane" style="display:none;">
+        <p style="font-size:13px;color:#666;">Pick a photo/scan of your signature. Tip: a PNG with a transparent background looks best.</p>
+        <button id="sigPickBtn">Choose image</button>
+        <input type="file" id="sigFileInput" accept="image/*">
+        <div id="sigPreview" style="margin-top:12px;"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button id="sigUseBtn" class="primary">Place on page</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const { PDFDocument, StandardFonts } = PDFLib;
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+/* ---------------- State ----------------
+ page = {
+   id, baseImage (dataURL, rotation already baked in), width, height,
+   texts:      [{id, xRel, yRel, text, fontRel, color}]   // fontRel = fontPx / imageHeight
+   strokes:    [{color, widthRel, points:[{x,y} relative 0..1]}]
+   signatures: [{id, dataUrl, xRel, yRel, wRel, hRel}]
+ }
+------------------------------------------*/
+let pages = [];
+let idCounter = 1;
+const newId = () => 'o' + (idCounter++);
+
+let currentPageId = null;
+let editorMode = 'select';
+let selectedTextBox = null;
+
+// working copies while the editor is open
+let workStrokes = [];
+let activeStroke = null;
+
+const $ = id => document.getElementById(id);
+const pageGrid = $('pageGrid'), emptyMsg = $('emptyMsg'), exportBtn = $('exportBtn');
+const statusMsg = $('statusMsg'), dropzone = $('dropzone'), fileInput = $('fileInput');
+const setStatus = m => statusMsg.textContent = m || '';
+
+/* ---------------- Loading files ---------------- */
+$('pickBtn').addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', e => handleFiles(e.target.files));
+['dragenter','dragover'].forEach(ev => dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.add('dragover'); }));
+['dragleave','drop'].forEach(ev => dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.remove('dragover'); }));
+dropzone.addEventListener('drop', e => handleFiles(e.dataTransfer.files));
+
+function loadImage(src) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => res(img);
+    img.onerror = rej;
+    img.src = src;
+  });
+}
+
+async function handleFiles(list) {
+  const files = Array.from(list || []);
+  if (!files.length) return;
+  setStatus('Loading…');
+  for (const f of files) {
+    try {
+      if (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) await addPdf(f);
+      else if (f.type.startsWith('image/')) await addImage(f);
+    } catch (err) { console.error(err); setStatus('Could not load ' + f.name); }
+  }
+  fileInput.value = '';
+  setStatus('');
+  render();
+}
+
+function blankPage(dataUrl, w, h) {
+  return { id: newId(), baseImage: dataUrl, width: w, height: h, texts: [], strokes: [], signatures: [] };
+}
+
+async function addImage(file) {
+  const dataUrl = await new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result); r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+  const img = await loadImage(dataUrl);
+  pages.push(blankPage(dataUrl, img.naturalWidth, img.naturalHeight));
+}
+
+async function addPdf(file) {
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const viewport = page.getViewport({ scale: 2 });
+    const c = document.createElement('canvas');
+    c.width = viewport.width; c.height = viewport.height;
+    await page.render({ canvasContext: c.getContext('2d'), viewport }).promise;
+    pages.push(blankPage(c.toDataURL('image/png'), c.width, c.height));
+  }
+}
+
+/* ---------------- Grid ---------------- */
+function render() {
+  emptyMsg.style.display = pages.length ? 'none' : 'block';
+  exportBtn.disabled = !pages.length;
+  pageGrid.innerHTML = '';
+
+  pages.forEach((p, idx) => {
+    const card = document.createElement('div');
+    card.className = 'page-card';
+    card.draggable = true;
+
+    card.addEventListener('dragstart', e => { card.classList.add('dragging'); e.dataTransfer.setData('text/plain', p.id); });
+    card.addEventListener('dragend', () => card.classList.remove('dragging'));
+    card.addEventListener('dragover', e => { e.preventDefault(); card.classList.add('drop-target'); });
+    card.addEventListener('dragleave', () => card.classList.remove('drop-target'));
+    card.addEventListener('drop', e => {
+      e.preventDefault(); card.classList.remove('drop-target');
+      reorder(e.dataTransfer.getData('text/plain'), p.id);
+    });
+
+    const badge = document.createElement('div');
+    badge.className = 'index-badge'; badge.textContent = idx + 1;
+    card.appendChild(badge);
+
+    const marks = [];
+    if (p.texts.length) marks.push('T');
+    if (p.strokes.length) marks.push('✏');
+    if (p.signatures.length) marks.push('✍');
+    if (marks.length) {
+      const m = document.createElement('div');
+      m.className = 'mark'; m.textContent = marks.join(' ');
+      card.appendChild(m);
+    }
+
+    const wrap = document.createElement('div');
+    wrap.className = 'thumb-wrap';
+    const img = document.createElement('img');
+    img.src = p.baseImage;
+    wrap.appendChild(img);
+    card.appendChild(wrap);
+
+    const actions = document.createElement('div');
+    actions.className = 'card-actions';
+
+    const rot = document.createElement('button');
+    rot.textContent = '⟳'; rot.title = 'Rotate 90°';
+    rot.addEventListener('click', () => rotatePage(p));
+
+    const edit = document.createElement('button');
+    edit.textContent = '✎ Edit';
+    edit.addEventListener('click', () => openEditor(p.id));
+
+    const del = document.createElement('button');
+    del.textContent = '🗑'; del.className = 'danger';
+    del.addEventListener('click', () => { pages = pages.filter(x => x.id !== p.id); render(); });
+
+    actions.append(rot, edit, del);
+    card.appendChild(actions);
+    pageGrid.appendChild(card);
+  });
+  updateEstimate();
+}
+
+function reorder(fromId, toId) {
+  if (fromId === toId) return;
+  const from = pages.findIndex(p => p.id === fromId);
+  const to = pages.findIndex(p => p.id === toId);
+  if (from < 0 || to < 0) return;
+  const [moved] = pages.splice(from, 1);
+  pages.splice(to, 0, moved);
+  render();
+}
+
+// Rotation is baked into the image immediately, and all annotation coordinates
+// are transformed with it so nothing drifts out of place.
+async function rotatePage(p) {
+  setStatus('Rotating…');
+  const img = await loadImage(p.baseImage);
+  const c = document.createElement('canvas');
+  c.width = img.naturalHeight; c.height = img.naturalWidth;
+  const ctx = c.getContext('2d');
+  ctx.translate(c.width / 2, c.height / 2);
+  ctx.rotate(Math.PI / 2);
+  ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
+  p.baseImage = c.toDataURL('image/png');
+  const oldW = p.width, oldH = p.height;
+  p.width = c.width; p.height = c.height;
+
+  // 90° clockwise: newX = 1 - oldY, newY = oldX
+  p.texts.forEach(t => {
+    const { xRel, yRel } = t;
+    t.xRel = 1 - yRel; t.yRel = xRel;
+    t.fontRel = t.fontRel * oldH / p.height; // keep on-page size constant
+  });
+  p.strokes.forEach(s => {
+    s.points = s.points.map(pt => ({ x: 1 - pt.y, y: pt.x }));
+    s.widthRel = s.widthRel * oldW / p.width;
+  });
+  p.signatures.forEach(s => {
+    const { xRel, yRel, wRel, hRel } = s;
+    s.xRel = 1 - yRel - hRel; s.yRel = xRel;
+    s.wRel = hRel * oldH / p.width;
+    s.hRel = wRel * oldW / p.height;
+  });
+  setStatus('');
+  render();
+}
+
+$('clearAllBtn').addEventListener('click', () => {
+  if (pages.length && !confirm('Remove all pages?')) return;
+  pages = []; render();
+});
+
+/* ---------------- Editor ---------------- */
+const editorOverlay = $('editorOverlay'), editorStage = $('editorStage');
+const colorInput = $('colorInput'), sizeInput = $('sizeInput');
+let baseImgEl = null, drawCanvas = null, drawCtx = null;
+
+function displaySize() {
+  return { w: baseImgEl.clientWidth, h: baseImgEl.clientHeight };
+}
+
+async function openEditor(pageId) {
+  currentPageId = pageId;
+  const p = pages.find(x => x.id === pageId);
+  if (!p) return;
+  selectedTextBox = null;
+  setMode('select');
+  workStrokes = p.strokes.map(s => ({ ...s, points: s.points.map(pt => ({ ...pt })) }));
+
+  editorStage.innerHTML = '';
+  baseImgEl = document.createElement('img');
+  baseImgEl.className = 'base';
+  editorStage.appendChild(baseImgEl);
+
+  // The overlay must be visible before measuring, otherwise the image reports
+  // a zero size and every relative coordinate collapses.
+  editorOverlay.classList.add('open');
+
+  await new Promise(res => { baseImgEl.onload = res; baseImgEl.src = p.baseImage; });
+  await new Promise(res => requestAnimationFrame(res));
+
+  const { w, h } = displaySize();
+  editorStage.style.width = w + 'px';
+  editorStage.style.height = h + 'px';
+
+  drawCanvas = document.createElement('canvas');
+  drawCanvas.id = 'drawLayer';
+  drawCanvas.width = w; drawCanvas.height = h;
+  editorStage.appendChild(drawCanvas);
+  drawCtx = drawCanvas.getContext('2d');
+  attachDrawHandlers();
+  repaintStrokes();
+
+  p.texts.forEach(t => createTextBox(t));
+  p.signatures.forEach(s => createSigBox(s));
+}
+
+function setMode(mode) {
+  editorMode = mode;
+  $('modeSelectBtn').classList.toggle('active', mode === 'select');
+  $('modeDrawBtn').classList.toggle('active', mode === 'draw');
+  if (drawCanvas) drawCanvas.style.pointerEvents = mode === 'draw' ? 'auto' : 'none';
+  if (drawCanvas) drawCanvas.style.cursor = mode === 'draw' ? 'crosshair' : 'default';
+}
+$('modeSelectBtn').addEventListener('click', () => setMode('select'));
+$('modeDrawBtn').addEventListener('click', () => setMode('draw'));
+
+/* --- freehand drawing --- */
+function repaintStrokes() {
+  const { w, h } = displaySize();
+  drawCtx.clearRect(0, 0, w, h);
+  drawCtx.lineCap = 'round';
+  drawCtx.lineJoin = 'round';
+  workStrokes.forEach(s => {
+    if (s.points.length < 2) return;
+    drawCtx.strokeStyle = s.color;
+    drawCtx.lineWidth = Math.max(1, s.widthRel * w);
+    drawCtx.beginPath();
+    drawCtx.moveTo(s.points[0].x * w, s.points[0].y * h);
+    for (let i = 1; i < s.points.length; i++) drawCtx.lineTo(s.points[i].x * w, s.points[i].y * h);
+    drawCtx.stroke();
+  });
+}
+
+function attachDrawHandlers() {
+  const pos = e => {
+    const r = drawCanvas.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+  };
+  drawCanvas.addEventListener('pointerdown', e => {
+    if (editorMode !== 'draw') return;
+    drawCanvas.setPointerCapture(e.pointerId);
+    activeStroke = {
+      color: colorInput.value,
+      widthRel: (parseFloat(sizeInput.value) || 4) / displaySize().w,
+      points: [pos(e)]
+    };
+    workStrokes.push(activeStroke);
+  });
+  drawCanvas.addEventListener('pointermove', e => {
+    if (!activeStroke) return;
+    activeStroke.points.push(pos(e));
+    repaintStrokes();
+  });
+  const end = () => { activeStroke = null; };
+  drawCanvas.addEventListener('pointerup', end);
+  drawCanvas.addEventListener('pointercancel', end);
+  drawCanvas.addEventListener('pointerleave', end);
+}
+
+$('undoStrokeBtn').addEventListener('click', () => { workStrokes.pop(); repaintStrokes(); });
+$('clearDrawBtn').addEventListener('click', () => { workStrokes = []; repaintStrokes(); });
+
+/* --- text boxes --- */
+function createTextBox(t) {
+  const { w, h } = displaySize();
+  const box = document.createElement('div');
+  box.className = 'text-box';
+  box.contentEditable = 'true';
+  box.dataset.id = t.id;
+  box.style.color = t.color;
+  box.style.fontSize = (t.fontRel * h) + 'px';
+  box.style.left = (t.xRel * w) + 'px';
+  box.style.top = (t.yRel * h) + 'px';
+  box.textContent = t.text;
+
+  const del = document.createElement('span');
+  del.className = 'obj-del';
+  del.contentEditable = 'false';
+  del.textContent = '✕';
+  del.addEventListener('mousedown', e => { e.stopPropagation(); e.preventDefault(); box.remove(); });
+  box.appendChild(del);
+
+  box.addEventListener('focus', () => {
+    selectedTextBox = box;
+    colorInput.value = toHex(box.style.color);
+    sizeInput.value = Math.round(parseFloat(box.style.fontSize));
+  });
+  box.addEventListener('blur', () => { if (selectedTextBox === box) selectedTextBox = null; });
+  makeDraggable(box, () => editorMode === 'select');
+  editorStage.appendChild(box);
+  return box;
+}
+
+$('addTextBtn').addEventListener('click', () => {
+  setMode('select');
+  const { h } = displaySize();
+  const box = createTextBox({
+    id: newId(), xRel: 0.15, yRel: 0.15, text: 'Text',
+    fontRel: (parseFloat(sizeInput.value) > 8 ? parseFloat(sizeInput.value) : 24) / h,
+    color: colorInput.value
+  });
+  box.focus();
+  // Select the placeholder so the user's first keystroke replaces it.
+  const textNode = Array.from(box.childNodes).find(n => n.nodeType === 3);
+  const r = document.createRange();
+  if (textNode) r.selectNodeContents(textNode); else { r.selectNodeContents(box); r.collapse(false); }
+  const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+});
+
+colorInput.addEventListener('input', () => { if (selectedTextBox) selectedTextBox.style.color = colorInput.value; });
+sizeInput.addEventListener('input', () => { if (selectedTextBox) selectedTextBox.style.fontSize = sizeInput.value + 'px'; });
+
+/* --- signature boxes --- */
+function createSigBox(s) {
+  const { w, h } = displaySize();
+  const box = document.createElement('div');
+  box.className = 'sig-box';
+  box.dataset.id = s.id;
+  box.dataset.src = s.dataUrl;
+  box.style.left = (s.xRel * w) + 'px';
+  box.style.top = (s.yRel * h) + 'px';
+  box.style.width = (s.wRel * w) + 'px';
+  box.style.height = (s.hRel * h) + 'px';
+
+  const img = document.createElement('img');
+  img.src = s.dataUrl;
+  box.appendChild(img);
+
+  const del = document.createElement('span');
+  del.className = 'obj-del'; del.textContent = '✕';
+  del.addEventListener('mousedown', e => { e.stopPropagation(); e.preventDefault(); box.remove(); });
+  box.appendChild(del);
+
+  const handle = document.createElement('div');
+  handle.className = 'sig-resize';
+  handle.addEventListener('mousedown', e => {
+    e.stopPropagation(); e.preventDefault();
+    const startX = e.clientX, startY = e.clientY;
+    const w0 = box.offsetWidth, h0 = box.offsetHeight;
+    const ratio = h0 / w0;
+    const move = ev => {
+      const nw = Math.max(20, w0 + (ev.clientX - startX));
+      box.style.width = nw + 'px';
+      box.style.height = (nw * ratio) + 'px';
+    };
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+  box.appendChild(handle);
+
+  makeDraggable(box, () => editorMode === 'select');
+  editorStage.appendChild(box);
+  return box;
+}
+
+function makeDraggable(box, allowed) {
+  box.addEventListener('mousedown', e => {
+    if (!allowed() || e.target.classList.contains('obj-del') || e.target.classList.contains('sig-resize')) return;
+    const startX = e.clientX, startY = e.clientY;
+    const l0 = parseFloat(box.style.left) || 0, t0 = parseFloat(box.style.top) || 0;
+    let moved = false;
+    const move = ev => {
+      if (Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY) > 3) moved = true;
+      if (!moved) return;
+      box.style.left = (l0 + ev.clientX - startX) + 'px';
+      box.style.top = (t0 + ev.clientY - startY) + 'px';
+    };
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+}
+
+function toHex(c) {
+  if (!c) return '#000000';
+  if (c.startsWith('#')) return c;
+  const m = c.match(/\d+/g);
+  return m ? '#' + m.slice(0, 3).map(n => (+n).toString(16).padStart(2, '0')).join('') : '#000000';
+}
+
+/* --- save / close --- */
+$('closeEditorBtn').addEventListener('click', () => { editorOverlay.classList.remove('open'); currentPageId = null; });
+
+$('saveEditorBtn').addEventListener('click', () => {
+  const p = pages.find(x => x.id === currentPageId);
+  if (p) {
+    const { w, h } = displaySize();
+    p.strokes = workStrokes.filter(s => s.points.length > 1);
+
+    p.texts = Array.from(editorStage.querySelectorAll('.text-box')).map(box => {
+      const clone = box.cloneNode(true);
+      const d = clone.querySelector('.obj-del'); if (d) d.remove();
+      const text = clone.textContent.replace(/\u00a0/g, ' ').trim();
+      // +5 / +3 accounts for the box's 1px border and 4px/2px padding so the
+      // exported text starts exactly where it appears in the editor.
+      return {
+        id: box.dataset.id,
+        xRel: ((parseFloat(box.style.left) || 0) + 5) / w,
+        yRel: ((parseFloat(box.style.top) || 0) + 3) / h,
+        text,
+        fontRel: (parseFloat(box.style.fontSize) || 24) / h,
+        color: toHex(box.style.color)
+      };
+    }).filter(t => t.text.length);
+
+    p.signatures = Array.from(editorStage.querySelectorAll('.sig-box')).map(box => ({
+      id: box.dataset.id,
+      dataUrl: box.dataset.src,
+      xRel: (parseFloat(box.style.left) || 0) / w,
+      yRel: (parseFloat(box.style.top) || 0) / h,
+      wRel: box.offsetWidth / w,
+      hRel: box.offsetHeight / h
+    }));
+  }
+  editorOverlay.classList.remove('open');
+  currentPageId = null;
+  render();
+});
+
+/* ---------------- Signature creator ---------------- */
+const sigOverlay = $('sigOverlay'), sigPad = $('sigPadCanvas');
+const sigCtx = sigPad.getContext('2d');
+let sigDrawing = false, sigHasInk = false, sigUploadedUrl = null;
+
+$('addSigBtn').addEventListener('click', () => {
+  clearSigPad();
+  sigUploadedUrl = null;
+  $('sigPreview').innerHTML = '';
+  showSigTab('draw');
+  sigOverlay.classList.add('open');
+});
+$('sigCloseBtn').addEventListener('click', () => sigOverlay.classList.remove('open'));
+
+function showSigTab(which) {
+  const draw = which === 'draw';
+  $('sigDrawTab').classList.toggle('active', draw);
+  $('sigUploadTab').classList.toggle('active', !draw);
+  $('sigDrawPane').style.display = draw ? 'block' : 'none';
+  $('sigUploadPane').style.display = draw ? 'none' : 'block';
+}
+$('sigDrawTab').addEventListener('click', () => showSigTab('draw'));
+$('sigUploadTab').addEventListener('click', () => showSigTab('upload'));
+
+function clearSigPad() {
+  sigCtx.clearRect(0, 0, sigPad.width, sigPad.height);
+  sigHasInk = false;
+}
+$('sigClearBtn').addEventListener('click', clearSigPad);
+
+const sigPos = e => {
+  const r = sigPad.getBoundingClientRect();
+  return { x: (e.clientX - r.left) * sigPad.width / r.width, y: (e.clientY - r.top) * sigPad.height / r.height };
+};
+sigPad.addEventListener('pointerdown', e => {
+  sigDrawing = true; sigHasInk = true;
+  sigPad.setPointerCapture(e.pointerId);
+  const p = sigPos(e);
+  sigCtx.strokeStyle = $('sigColorInput').value;
+  sigCtx.lineWidth = 3; sigCtx.lineCap = 'round'; sigCtx.lineJoin = 'round';
+  sigCtx.beginPath(); sigCtx.moveTo(p.x, p.y);
+});
+sigPad.addEventListener('pointermove', e => {
+  if (!sigDrawing) return;
+  const p = sigPos(e);
+  sigCtx.lineTo(p.x, p.y); sigCtx.stroke();
+});
+['pointerup','pointercancel','pointerleave'].forEach(ev => sigPad.addEventListener(ev, () => sigDrawing = false));
+
+$('sigPickBtn').addEventListener('click', () => $('sigFileInput').click());
+$('sigFileInput').addEventListener('change', e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    sigUploadedUrl = r.result;
+    $('sigPreview').innerHTML = '';
+    const im = document.createElement('img');
+    im.src = sigUploadedUrl;
+    im.style.maxWidth = '300px'; im.style.border = '1px solid #ddd';
+    $('sigPreview').appendChild(im);
+  };
+  r.readAsDataURL(f);
+  e.target.value = '';
+});
+
+// Trim empty space around a drawn signature so it places tightly on the page.
+function trimSignature(canvas) {
+  const { width: w, height: h } = canvas;
+  const data = canvas.getContext('2d').getImageData(0, 0, w, h).data;
+  let minX = w, minY = h, maxX = -1, maxY = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (data[(y * w + x) * 4 + 3] > 10) {
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) return null;
+  const pad = 6;
+  minX = Math.max(0, minX - pad); minY = Math.max(0, minY - pad);
+  maxX = Math.min(w - 1, maxX + pad); maxY = Math.min(h - 1, maxY + pad);
+  const out = document.createElement('canvas');
+  out.width = maxX - minX + 1; out.height = maxY - minY + 1;
+  out.getContext('2d').drawImage(canvas, minX, minY, out.width, out.height, 0, 0, out.width, out.height);
+  return out;
+}
+
+$('sigUseBtn').addEventListener('click', async () => {
+  let dataUrl = null;
+  if ($('sigDrawPane').style.display !== 'none') {
+    if (!sigHasInk) { alert('Draw your signature first.'); return; }
+    const trimmed = trimSignature(sigPad);
+    if (!trimmed) { alert('Draw your signature first.'); return; }
+    dataUrl = trimmed.toDataURL('image/png');
+  } else {
+    if (!sigUploadedUrl) { alert('Choose an image first.'); return; }
+    dataUrl = sigUploadedUrl;
+  }
+
+  const img = await loadImage(dataUrl);
+  const { w, h } = displaySize();
+  const targetW = w * 0.3;
+  const targetH = targetW * (img.naturalHeight / img.naturalWidth);
+  createSigBox({
+    id: newId(), dataUrl,
+    xRel: 0.5 - 0.15, yRel: 0.6,
+    wRel: targetW / w, hRel: targetH / h
+  });
+  sigOverlay.classList.remove('open');
+  setMode('select');
+});
+
+/* ---------------- Quality controls ---------------- */
+const formatSelect = $('formatSelect'), qualityRange = $('qualityRange'), maxDimSelect = $('maxDimSelect');
+function syncQualityUI() {
+  const isJpeg = formatSelect.value === 'image/jpeg';
+  $('qualityWrap').style.display = isJpeg ? 'flex' : 'none';
+  $('qualityVal').textContent = Math.round(qualityRange.value * 100) + '%';
+  updateEstimate();
+}
+[formatSelect, qualityRange, maxDimSelect].forEach(el => el.addEventListener('input', syncQualityUI));
+
+function updateEstimate() {
+  if (!pages.length) { $('estimate').textContent = ''; return; }
+  const maxDim = parseInt(maxDimSelect.value) || 0;
+  const isJpeg = formatSelect.value === 'image/jpeg';
+  const q = parseFloat(qualityRange.value);
+  let bytes = 0;
+  pages.forEach(p => {
+    let w = p.width, h = p.height;
+    if (maxDim) { const s = Math.min(1, maxDim / Math.max(w, h)); w *= s; h *= s; }
+    const px = w * h;
+    bytes += isJpeg ? px * 0.13 * q : px * 1.2;
+  });
+  const mb = bytes / (1024 * 1024);
+  $('estimate').textContent = `≈ ${mb < 1 ? (mb * 1024).toFixed(0) + ' KB' : mb.toFixed(1) + ' MB'} · ${pages.length} page${pages.length > 1 ? 's' : ''}`;
+}
+
+/* ---------------- Export ---------------- */
+exportBtn.addEventListener('click', exportPdf);
+
+async function renderPageToCanvas(p) {
+  const img = await loadImage(p.baseImage);
+  const maxDim = parseInt(maxDimSelect.value) || 0;
+  let scale = 1;
+  if (maxDim) scale = Math.min(1, maxDim / Math.max(p.width, p.height));
+
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(p.width * scale));
+  c.height = Math.max(1, Math.round(p.height * scale));
+  const ctx = c.getContext('2d');
+
+  // JPEG has no alpha, so give transparent sources a white background.
+  if (formatSelect.value === 'image/jpeg') {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, c.width, c.height);
+  }
+  ctx.drawImage(img, 0, 0, c.width, c.height);
+
+  // strokes
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  p.strokes.forEach(s => {
+    if (s.points.length < 2) return;
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = Math.max(1, s.widthRel * c.width);
+    ctx.beginPath();
+    ctx.moveTo(s.points[0].x * c.width, s.points[0].y * c.height);
+    for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x * c.width, s.points[i].y * c.height);
+    ctx.stroke();
+  });
+
+  // signatures
+  for (const s of p.signatures) {
+    const sImg = await loadImage(s.dataUrl);
+    ctx.drawImage(sImg, s.xRel * c.width, s.yRel * c.height, s.wRel * c.width, s.hRel * c.height);
+  }
+
+  // text
+  ctx.textBaseline = 'top';
+  p.texts.forEach(t => {
+    const fontPx = t.fontRel * c.height;
+    ctx.fillStyle = t.color;
+    ctx.font = `${fontPx}px sans-serif`;
+    t.text.split('\n').forEach((line, i) => {
+      ctx.fillText(line, t.xRel * c.width, t.yRel * c.height + i * fontPx * 1.2);
+    });
+  });
+
+  return c;
+}
+
+async function exportPdf() {
+  if (!pages.length) return;
+  exportBtn.disabled = true;
+  const fmt = formatSelect.value;
+  const q = parseFloat(qualityRange.value);
+  try {
+    const pdfDoc = await PDFDocument.create();
+    for (let i = 0; i < pages.length; i++) {
+      setStatus(`Rendering page ${i + 1} of ${pages.length}…`);
+      const c = await renderPageToCanvas(pages[i]);
+      const dataUrl = fmt === 'image/jpeg' ? c.toDataURL('image/jpeg', q) : c.toDataURL('image/png');
+      const bytes = await fetch(dataUrl).then(r => r.arrayBuffer());
+      const embedded = fmt === 'image/jpeg' ? await pdfDoc.embedJpg(bytes) : await pdfDoc.embedPng(bytes);
+      // Size the page at 150 DPI so pages come out at sensible physical dimensions.
+      const pw = c.width * 72 / 150, ph = c.height * 72 / 150;
+      const page = pdfDoc.addPage([pw, ph]);
+      page.drawImage(embedded, { x: 0, y: 0, width: pw, height: ph });
+    }
+    setStatus('Saving…');
+    const out = await pdfDoc.save();
+    const blob = new Blob([out], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'document.pdf';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    const mb = blob.size / (1024 * 1024);
+    setStatus(`Done — ${mb < 1 ? (blob.size / 1024).toFixed(0) + ' KB' : mb.toFixed(1) + ' MB'} downloaded.`);
+  } catch (err) {
+    console.error(err);
+    setStatus('Export failed — see console.');
+  } finally {
+    exportBtn.disabled = !pages.length;
+  }
+}
+
+syncQualityUI();
+render();
+</script>
+</body>
+</html>
