@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PDF Builder</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="vendor/pdf-lib.min.js"></script>
+<script src="vendor/pdf.min.js"></script>
 <style>
   :root {
     --bg: #f5f6f8;
@@ -169,6 +169,7 @@
     line-height: 1.2; font-family: sans-serif;
   }
   .text-box:hover, .text-box:focus { border-color: var(--accent); }
+  .text-box.selected { border-color: var(--accent); border-style: solid; }
   .obj-del {
     position: absolute; top: -10px; right: -10px;
     width: 18px; height: 18px; line-height: 16px; text-align: center;
@@ -254,7 +255,8 @@
         <button id="modeDrawBtn">✏️ Draw</button>
         <div class="sep"></div>
         <label>Color <input type="color" id="colorInput" value="#d0021b"></label>
-        <label>Size <input type="number" id="sizeInput" value="4" min="1" max="80"></label>
+        <label title="Pen width for freehand drawing">Pen <input type="number" id="penSizeInput" value="4" min="1" max="80"></label>
+        <label title="Font size of the selected text box">Font <input type="number" id="fontSizeInput" value="24" min="6" max="200"></label>
         <div class="sep"></div>
         <button id="addTextBtn">+ Text</button>
         <button id="addSigBtn">✍️ Signature</button>
@@ -264,7 +266,7 @@
       </div>
       <button id="closeEditorBtn">Close</button>
     </div>
-    <div class="hint" id="editorHint">Select mode: drag text/signatures. Draw mode: hold and drag on the page to draw. "Size" sets pen width, or font size when a text box is selected.</div>
+    <div class="hint" id="editorHint">Select mode: drag text/signatures. Draw mode: hold and drag on the page to draw. "Pen" sets the drawing width; click a text box to select it, then use "Font" and "Color" to restyle it.</div>
     <div id="editorCanvasWrap">
       <div id="editorStage"></div>
     </div>
@@ -308,7 +310,7 @@
 
 <script>
 const { PDFDocument, StandardFonts } = PDFLib;
-pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
 
 /* ---------------- State ----------------
  page = {
@@ -351,6 +353,21 @@ function loadImage(src) {
   });
 }
 
+function readAsDataURL(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+}
+
+function formatBytes(bytes) {
+  return bytes < 1024 * 1024
+    ? (bytes / 1024).toFixed(0) + ' KB'
+    : (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
 async function handleFiles(list) {
   const files = Array.from(list || []);
   if (!files.length) return;
@@ -371,11 +388,7 @@ function blankPage(dataUrl, w, h) {
 }
 
 async function addImage(file) {
-  const dataUrl = await new Promise((res, rej) => {
-    const r = new FileReader();
-    r.onload = () => res(r.result); r.onerror = rej;
-    r.readAsDataURL(file);
-  });
+  const dataUrl = await readAsDataURL(file);
   const img = await loadImage(dataUrl);
   pages.push(blankPage(dataUrl, img.naturalWidth, img.naturalHeight));
 }
@@ -456,13 +469,15 @@ function render() {
   updateEstimate();
 }
 
+// Insert-before semantics: the dragged page takes the target's slot and the
+// target shifts right. The destination index is recomputed after the removal,
+// otherwise dragging a page downwards lands it one slot too early.
 function reorder(fromId, toId) {
   if (fromId === toId) return;
   const from = pages.findIndex(p => p.id === fromId);
-  const to = pages.findIndex(p => p.id === toId);
-  if (from < 0 || to < 0) return;
+  if (from < 0 || pages.findIndex(p => p.id === toId) < 0) return;
   const [moved] = pages.splice(from, 1);
-  pages.splice(to, 0, moved);
+  pages.splice(pages.findIndex(p => p.id === toId), 0, moved);
   render();
 }
 
@@ -508,7 +523,7 @@ $('clearAllBtn').addEventListener('click', () => {
 
 /* ---------------- Editor ---------------- */
 const editorOverlay = $('editorOverlay'), editorStage = $('editorStage');
-const colorInput = $('colorInput'), sizeInput = $('sizeInput');
+const colorInput = $('colorInput'), penSizeInput = $('penSizeInput'), fontSizeInput = $('fontSizeInput');
 let baseImgEl = null, drawCanvas = null, drawCtx = null;
 
 function displaySize() {
@@ -562,20 +577,26 @@ $('modeSelectBtn').addEventListener('click', () => setMode('select'));
 $('modeDrawBtn').addEventListener('click', () => setMode('draw'));
 
 /* --- freehand drawing --- */
+// Shared by the live editor overlay and the export canvas, which differ only
+// in the pixel dimensions the relative coordinates are scaled against.
+function drawStrokes(ctx, strokes, w, h) {
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  strokes.forEach(s => {
+    if (s.points.length < 2) return;
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = Math.max(1, s.widthRel * w);
+    ctx.beginPath();
+    ctx.moveTo(s.points[0].x * w, s.points[0].y * h);
+    for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x * w, s.points[i].y * h);
+    ctx.stroke();
+  });
+}
+
 function repaintStrokes() {
   const { w, h } = displaySize();
   drawCtx.clearRect(0, 0, w, h);
-  drawCtx.lineCap = 'round';
-  drawCtx.lineJoin = 'round';
-  workStrokes.forEach(s => {
-    if (s.points.length < 2) return;
-    drawCtx.strokeStyle = s.color;
-    drawCtx.lineWidth = Math.max(1, s.widthRel * w);
-    drawCtx.beginPath();
-    drawCtx.moveTo(s.points[0].x * w, s.points[0].y * h);
-    for (let i = 1; i < s.points.length; i++) drawCtx.lineTo(s.points[i].x * w, s.points[i].y * h);
-    drawCtx.stroke();
-  });
+  drawStrokes(drawCtx, workStrokes, w, h);
 }
 
 function attachDrawHandlers() {
@@ -588,7 +609,7 @@ function attachDrawHandlers() {
     drawCanvas.setPointerCapture(e.pointerId);
     activeStroke = {
       color: colorInput.value,
-      widthRel: (parseFloat(sizeInput.value) || 4) / displaySize().w,
+      widthRel: (parseFloat(penSizeInput.value) || 4) / displaySize().w,
       points: [pos(e)]
     };
     workStrokes.push(activeStroke);
@@ -627,15 +648,26 @@ function createTextBox(t) {
   del.addEventListener('mousedown', e => { e.stopPropagation(); e.preventDefault(); box.remove(); });
   box.appendChild(del);
 
-  box.addEventListener('focus', () => {
-    selectedTextBox = box;
-    colorInput.value = toHex(box.style.color);
-    sizeInput.value = Math.round(parseFloat(box.style.fontSize));
-  });
-  box.addEventListener('blur', () => { if (selectedTextBox === box) selectedTextBox = null; });
-  makeDraggable(box, () => editorMode === 'select');
+  box.addEventListener('focus', () => selectTextBox(box));
+  makeDraggable(box);
   editorStage.appendChild(box);
   return box;
+}
+
+// Selection is kept sticky rather than cleared on blur: clicking the Font or
+// Color control blurs the box, and clearing here made those edits no-op.
+function selectTextBox(box) {
+  if (selectedTextBox && selectedTextBox !== box) selectedTextBox.classList.remove('selected');
+  selectedTextBox = box;
+  if (!box) return;
+  box.classList.add('selected');
+  colorInput.value = toHex(box.style.color);
+  fontSizeInput.value = Math.round(parseFloat(box.style.fontSize)) || 24;
+}
+
+function clearTextSelection() {
+  if (selectedTextBox) selectedTextBox.classList.remove('selected');
+  selectedTextBox = null;
 }
 
 $('addTextBtn').addEventListener('click', () => {
@@ -643,7 +675,7 @@ $('addTextBtn').addEventListener('click', () => {
   const { h } = displaySize();
   const box = createTextBox({
     id: newId(), xRel: 0.15, yRel: 0.15, text: 'Text',
-    fontRel: (parseFloat(sizeInput.value) > 8 ? parseFloat(sizeInput.value) : 24) / h,
+    fontRel: (parseFloat(fontSizeInput.value) || 24) / h,
     color: colorInput.value
   });
   box.focus();
@@ -655,7 +687,7 @@ $('addTextBtn').addEventListener('click', () => {
 });
 
 colorInput.addEventListener('input', () => { if (selectedTextBox) selectedTextBox.style.color = colorInput.value; });
-sizeInput.addEventListener('input', () => { if (selectedTextBox) selectedTextBox.style.fontSize = sizeInput.value + 'px'; });
+fontSizeInput.addEventListener('input', () => { if (selectedTextBox) selectedTextBox.style.fontSize = fontSizeInput.value + 'px'; });
 
 /* --- signature boxes --- */
 function createSigBox(s) {
@@ -682,40 +714,45 @@ function createSigBox(s) {
   handle.className = 'sig-resize';
   handle.addEventListener('mousedown', e => {
     e.stopPropagation(); e.preventDefault();
-    const startX = e.clientX, startY = e.clientY;
-    const w0 = box.offsetWidth, h0 = box.offsetHeight;
-    const ratio = h0 / w0;
-    const move = ev => {
+    const startX = e.clientX;
+    const w0 = box.offsetWidth;
+    const ratio = box.offsetHeight / w0;
+    trackDrag(ev => {
       const nw = Math.max(20, w0 + (ev.clientX - startX));
       box.style.width = nw + 'px';
       box.style.height = (nw * ratio) + 'px';
-    };
-    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
-    document.addEventListener('mousemove', move);
-    document.addEventListener('mouseup', up);
+    });
   });
   box.appendChild(handle);
 
-  makeDraggable(box, () => editorMode === 'select');
+  makeDraggable(box);
   editorStage.appendChild(box);
   return box;
 }
 
-function makeDraggable(box, allowed) {
+// Runs `onMove` for the duration of a mouse drag and unbinds both listeners
+// when it ends.
+function trackDrag(onMove) {
+  const up = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', up);
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', up);
+}
+
+function makeDraggable(box) {
   box.addEventListener('mousedown', e => {
-    if (!allowed() || e.target.classList.contains('obj-del') || e.target.classList.contains('sig-resize')) return;
+    if (editorMode !== 'select' || e.target.classList.contains('obj-del') || e.target.classList.contains('sig-resize')) return;
     const startX = e.clientX, startY = e.clientY;
-    const l0 = parseFloat(box.style.left) || 0, t0 = parseFloat(box.style.top) || 0;
+    const left0 = parseFloat(box.style.left) || 0, top0 = parseFloat(box.style.top) || 0;
     let moved = false;
-    const move = ev => {
+    trackDrag(ev => {
       if (Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY) > 3) moved = true;
       if (!moved) return;
-      box.style.left = (l0 + ev.clientX - startX) + 'px';
-      box.style.top = (t0 + ev.clientY - startY) + 'px';
-    };
-    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
-    document.addEventListener('mousemove', move);
-    document.addEventListener('mouseup', up);
+      box.style.left = (left0 + ev.clientX - startX) + 'px';
+      box.style.top = (top0 + ev.clientY - startY) + 'px';
+    });
   });
 }
 
@@ -727,7 +764,13 @@ function toHex(c) {
 }
 
 /* --- save / close --- */
-$('closeEditorBtn').addEventListener('click', () => { editorOverlay.classList.remove('open'); currentPageId = null; });
+function closeEditor() {
+  editorOverlay.classList.remove('open');
+  currentPageId = null;
+  clearTextSelection();
+}
+
+$('closeEditorBtn').addEventListener('click', closeEditor);
 
 $('saveEditorBtn').addEventListener('click', () => {
   const p = pages.find(x => x.id === currentPageId);
@@ -760,8 +803,7 @@ $('saveEditorBtn').addEventListener('click', () => {
       hRel: box.offsetHeight / h
     }));
   }
-  editorOverlay.classList.remove('open');
-  currentPageId = null;
+  closeEditor();
   render();
 });
 
@@ -815,20 +857,16 @@ sigPad.addEventListener('pointermove', e => {
 ['pointerup','pointercancel','pointerleave'].forEach(ev => sigPad.addEventListener(ev, () => sigDrawing = false));
 
 $('sigPickBtn').addEventListener('click', () => $('sigFileInput').click());
-$('sigFileInput').addEventListener('change', e => {
+$('sigFileInput').addEventListener('change', async e => {
   const f = e.target.files[0];
-  if (!f) return;
-  const r = new FileReader();
-  r.onload = () => {
-    sigUploadedUrl = r.result;
-    $('sigPreview').innerHTML = '';
-    const im = document.createElement('img');
-    im.src = sigUploadedUrl;
-    im.style.maxWidth = '300px'; im.style.border = '1px solid #ddd';
-    $('sigPreview').appendChild(im);
-  };
-  r.readAsDataURL(f);
   e.target.value = '';
+  if (!f) return;
+  sigUploadedUrl = await readAsDataURL(f);
+  $('sigPreview').innerHTML = '';
+  const im = document.createElement('img');
+  im.src = sigUploadedUrl;
+  im.style.maxWidth = '300px'; im.style.border = '1px solid #ddd';
+  $('sigPreview').appendChild(im);
 });
 
 // Trim empty space around a drawn signature so it places tightly on the page.
@@ -881,9 +919,19 @@ $('sigUseBtn').addEventListener('click', async () => {
 
 /* ---------------- Quality controls ---------------- */
 const formatSelect = $('formatSelect'), qualityRange = $('qualityRange'), maxDimSelect = $('maxDimSelect');
+
+// One place decides how output is encoded, so the JPEG check isn't repeated
+// across the estimator, the renderer and the exporter.
+function outputSettings() {
+  return {
+    isJpeg: formatSelect.value === 'image/jpeg',
+    quality: parseFloat(qualityRange.value),
+    maxDim: parseInt(maxDimSelect.value) || 0
+  };
+}
+
 function syncQualityUI() {
-  const isJpeg = formatSelect.value === 'image/jpeg';
-  $('qualityWrap').style.display = isJpeg ? 'flex' : 'none';
+  $('qualityWrap').style.display = outputSettings().isJpeg ? 'flex' : 'none';
   $('qualityVal').textContent = Math.round(qualityRange.value * 100) + '%';
   updateEstimate();
 }
@@ -891,18 +939,15 @@ function syncQualityUI() {
 
 function updateEstimate() {
   if (!pages.length) { $('estimate').textContent = ''; return; }
-  const maxDim = parseInt(maxDimSelect.value) || 0;
-  const isJpeg = formatSelect.value === 'image/jpeg';
-  const q = parseFloat(qualityRange.value);
+  const { isJpeg, quality, maxDim } = outputSettings();
   let bytes = 0;
   pages.forEach(p => {
     let w = p.width, h = p.height;
     if (maxDim) { const s = Math.min(1, maxDim / Math.max(w, h)); w *= s; h *= s; }
     const px = w * h;
-    bytes += isJpeg ? px * 0.13 * q : px * 1.2;
+    bytes += isJpeg ? px * 0.13 * quality : px * 1.2;
   });
-  const mb = bytes / (1024 * 1024);
-  $('estimate').textContent = `≈ ${mb < 1 ? (mb * 1024).toFixed(0) + ' KB' : mb.toFixed(1) + ' MB'} · ${pages.length} page${pages.length > 1 ? 's' : ''}`;
+  $('estimate').textContent = `≈ ${formatBytes(bytes)} · ${pages.length} page${pages.length > 1 ? 's' : ''}`;
 }
 
 /* ---------------- Export ---------------- */
@@ -910,9 +955,8 @@ exportBtn.addEventListener('click', exportPdf);
 
 async function renderPageToCanvas(p) {
   const img = await loadImage(p.baseImage);
-  const maxDim = parseInt(maxDimSelect.value) || 0;
-  let scale = 1;
-  if (maxDim) scale = Math.min(1, maxDim / Math.max(p.width, p.height));
+  const { isJpeg, maxDim } = outputSettings();
+  const scale = maxDim ? Math.min(1, maxDim / Math.max(p.width, p.height)) : 1;
 
   const c = document.createElement('canvas');
   c.width = Math.max(1, Math.round(p.width * scale));
@@ -920,31 +964,19 @@ async function renderPageToCanvas(p) {
   const ctx = c.getContext('2d');
 
   // JPEG has no alpha, so give transparent sources a white background.
-  if (formatSelect.value === 'image/jpeg') {
+  if (isJpeg) {
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, c.width, c.height);
   }
   ctx.drawImage(img, 0, 0, c.width, c.height);
 
-  // strokes
-  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-  p.strokes.forEach(s => {
-    if (s.points.length < 2) return;
-    ctx.strokeStyle = s.color;
-    ctx.lineWidth = Math.max(1, s.widthRel * c.width);
-    ctx.beginPath();
-    ctx.moveTo(s.points[0].x * c.width, s.points[0].y * c.height);
-    for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x * c.width, s.points[i].y * c.height);
-    ctx.stroke();
-  });
+  drawStrokes(ctx, p.strokes, c.width, c.height);
 
-  // signatures
   for (const s of p.signatures) {
     const sImg = await loadImage(s.dataUrl);
     ctx.drawImage(sImg, s.xRel * c.width, s.yRel * c.height, s.wRel * c.width, s.hRel * c.height);
   }
 
-  // text
   ctx.textBaseline = 'top';
   p.texts.forEach(t => {
     const fontPx = t.fontRel * c.height;
@@ -961,16 +993,15 @@ async function renderPageToCanvas(p) {
 async function exportPdf() {
   if (!pages.length) return;
   exportBtn.disabled = true;
-  const fmt = formatSelect.value;
-  const q = parseFloat(qualityRange.value);
+  const { isJpeg, quality } = outputSettings();
   try {
     const pdfDoc = await PDFDocument.create();
     for (let i = 0; i < pages.length; i++) {
       setStatus(`Rendering page ${i + 1} of ${pages.length}…`);
       const c = await renderPageToCanvas(pages[i]);
-      const dataUrl = fmt === 'image/jpeg' ? c.toDataURL('image/jpeg', q) : c.toDataURL('image/png');
+      const dataUrl = isJpeg ? c.toDataURL('image/jpeg', quality) : c.toDataURL('image/png');
       const bytes = await fetch(dataUrl).then(r => r.arrayBuffer());
-      const embedded = fmt === 'image/jpeg' ? await pdfDoc.embedJpg(bytes) : await pdfDoc.embedPng(bytes);
+      const embedded = isJpeg ? await pdfDoc.embedJpg(bytes) : await pdfDoc.embedPng(bytes);
       // Size the page at 150 DPI so pages come out at sensible physical dimensions.
       const pw = c.width * 72 / 150, ph = c.height * 72 / 150;
       const page = pdfDoc.addPage([pw, ph]);
@@ -984,8 +1015,7 @@ async function exportPdf() {
     a.href = url; a.download = 'document.pdf';
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
-    const mb = blob.size / (1024 * 1024);
-    setStatus(`Done — ${mb < 1 ? (blob.size / 1024).toFixed(0) + ' KB' : mb.toFixed(1) + ' MB'} downloaded.`);
+    setStatus(`Done — ${formatBytes(blob.size)} downloaded.`);
   } catch (err) {
     console.error(err);
     setStatus('Export failed — see console.');

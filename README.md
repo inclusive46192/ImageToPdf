@@ -32,7 +32,7 @@ A single-page web app for turning images and PDFs into a polished PDF — combin
 ### Notes on the editor
 
 - Switch between **🖱 Select** (move text and signatures) and **✏️ Draw** (draw on the page).
-- The **Size** field sets the pen width while drawing, or the font size when a text box is selected.
+- The **Pen** field sets the drawing width; the **Font** field sets the font size of the currently selected text box. Click a text box to select it (it stays selected until you click another one), then adjust **Font** or **Color**.
 - Hover a text box or signature to reveal its ✕ delete button; signatures also get a corner handle for resizing.
 - Click **Save changes** to apply your edits to the page.
 
@@ -48,7 +48,7 @@ Pages are written at 150 DPI so they come out at sensible physical dimensions.
 
 ## Running it locally
 
-No build step and no dependencies to install — it's one self-contained HTML file. Either:
+No build step and nothing to install. `index.html` holds all of the app's own code; the two PDF libraries sit alongside it in `vendor/`, so keep the folder together. Either:
 
 - Open `index.html` directly in your browser, or
 - Serve the folder, e.g. `python -m http.server 8000`, then visit <http://localhost:8000>.
@@ -64,7 +64,7 @@ The app is fully static, so any static host works. To use GitHub Pages: go to **
 
 Each page is drawn to a `<canvas>` with its rotation, drawings, signatures and text baked in, then embedded into the PDF. Annotation coordinates are stored relative to the page (0–1) so they stay correctly positioned at any export resolution.
 
-Both libraries load from a CDN, so the first load needs an internet connection; browsers cache them afterwards.
+Both libraries are vendored in `vendor/`, so the app works fully offline — no CDN and no network requests at all once you have the folder.
 
 ## Limitations
 
